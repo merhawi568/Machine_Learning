@@ -1,0 +1,137 @@
+import pickle
+import sys
+import numpy as np
+import matplotlib.pyplot as plt  
+sys.path.append("../tools/")
+
+from sklearn import tree, feature_selection
+from feature_format import featureFormat, targetFeatureSplit
+from sklearn.feature_selection import f_classif, SelectKBest
+from sklearn.cross_validation import train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.metrics import precision_recall_fscore_support
+from tester import dump_classifier_and_data
+from sklearn.cross_validation import StratifiedShuffleSplit
+
+### read in data dictionary, convert to numpy array
+data_dict = pickle.load( open("../final_project/final_project_dataset.pkl", "r") )
+
+# we are going to create a new feature that is the difference between total payments and salary
+# this is meant to add all non-salary related payments given to ENRON employees. 
+
+for key in data_dict:
+    if data_dict[key]['total_payments']!='NaN' and data_dict[key]['salary'] !='NaN':
+       data_dict[key]['Non_salary_payments']=data_dict[key]['total_payments']-data_dict[key]['salary']
+       
+    else:
+       data_dict[key]['Non_salary_payments']='NaN'
+       
+# lets measure the precison and recall of the classifier with this feature added 
+
+####
+features_considered = ['poi','Non_salary_payments','salary', 'from_this_person_to_poi', 'shared_receipt_with_poi','loan_advances','deferred_income', 'total_stock_value', 'expenses', 'exercised_stock_options', 'other', 'long_term_incentive', 'restricted_stock', 'director_fees','to_messages', 'deferral_payments', 'total_payments', 'bonus', 'restricted_stock_deferred','from_poi_to_this_person', 'from_messages']
+
+data = featureFormat(data_dict, features_considered)
+my_dataset=data_dict
+labels_data=data[:,0] # poi is the label
+features_data=data[:,1:21] # the rest of the features
+
+### spliting the data set to training and testing data
+features_training, features_testing, labels_training, labels_testing = train_test_split(features_data, labels_data, test_size=0.3, random_state=42)
+###############################################################################
+# Create a feature-selection transform using selectkbest and an instance of decision tree using pipeline
+# idea is to find the optimal number and type of features
+# To find the best combination of features, a modified version of the tester.py will be used
+
+transform = SelectKBest(f_classif)
+no_of_features=[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]
+
+# we are going to use DecisionTreeClassifier
+from sklearn import neighbors
+
+Precision_score=[]
+Recall_score=[]
+for k in no_of_features:
+    
+    # fitting
+    features_list=[]
+    features_list.append('poi')
+    clf = Pipeline([('anova', transform), ('tree', tree.DecisionTreeClassifier(criterion='entropy'))])
+    clf.set_params(anova__k=k).fit(features_training, labels_training)
+    selected_features=clf.named_steps['anova'].get_support()
+  
+    for i in range(len(selected_features)):
+        if selected_features[i]== True:
+           features_list.append(features_considered[i+1])
+          
+    print 'features_list', features_list
+    dump_classifier_and_data(clf, my_dataset, features_list)
+
+    # A modifed version of tester.py to find the precision and recall 
+
+    data = featureFormat(my_dataset, features_list, sort_keys = True)
+    labels, features = targetFeatureSplit(data)
+    cv = StratifiedShuffleSplit(labels, 1000, random_state = 42)
+    true_negatives = 0
+    false_negatives = 0
+    true_positives = 0
+    false_positives = 0
+    for train_idx, test_idx in cv: 
+        features_train = []
+        features_test  = []
+        labels_train   = []
+        labels_test    = []
+        for ii in train_idx:
+            features_train.append( features[ii] )
+            labels_train.append( labels[ii] )
+        for jj in test_idx:
+            features_test.append( features[jj] )
+            labels_test.append( labels[jj] )
+        
+        ### fit the classifier using training set, and test on test set
+        clf.fit(features_train, labels_train)
+        predictions = clf.predict(features_test)
+        for prediction, truth in zip(predictions, labels_test):
+            if prediction == 0 and truth == 0:
+               true_negatives += 1
+            elif prediction == 0 and truth == 1:
+               false_negatives += 1
+            elif prediction == 1 and truth == 0:
+               false_positives += 1
+            elif prediction == 1 and truth == 1:
+               true_positives += 1
+            else:
+               print "Warning: Found a predicted label not == 0 or 1."
+               print "All predictions should take value 0 or 1."
+               print "Evaluating performance for processed predictions:"
+               break
+    
+    total_predictions = true_negatives + false_negatives + false_positives + true_positives
+    accuracy = 1.0*(true_positives + true_negatives)/total_predictions
+    if true_positives+false_positives>0:
+       precision = 1.0*true_positives/(true_positives+false_positives)
+       recall = 1.0*true_positives/(true_positives+false_negatives)
+    if precision + recall>0:
+       f1 = 2.0 * true_positives/(2*true_positives + false_positives+false_negatives)
+       f2 = (1+2.0*2.0) * precision*recall/(4*precision + recall)
+      
+    else:
+       print "Got a divide by zero when trying out:", clf
+       print "Precision or recall may be undefined due to a lack of true positive predicitons."
+    
+    Precision_score.append(precision)
+    Recall_score.append(recall)
+##############################################################################################   
+    
+# Plot the Precision and Recall as a function of k of features
+plt.figure(1)
+p1 =plt.plot(no_of_features,Recall_score,'r*-')
+p2=plt.plot(no_of_features,Precision_score,'g*-')
+
+plt.title( 'Precision and Recall VS no of features selected')
+plt.xlabel('No of features selceted(k)')
+plt.ylabel('Score')
+
+plt.legend((p1[0], p2[0]), ('Recall', 'Precision'))
+#plt.axis('tight')
+plt.show()
